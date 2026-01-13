@@ -61,6 +61,7 @@ func main() {
 	var writeNfo bool
 	var metadataOnly bool
 	var forceDownload bool
+	var concurrency int
 	var downloadCmd = &cobra.Command{
 		Use:     "download [class/chapter/category...]",
 		Aliases: []string{"dl"},
@@ -98,12 +99,12 @@ Supported URL formats:
 			for _, arg := range args {
 				// Check if this is a category/homepage URL
 				if strings.Contains(arg, "/homepage/") {
-					err := downloadCategory(getClient(datDir), datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, limit, nameAsSeries, writeNfo, metadataOnly, forceDownload, arg)
+					err := downloadCategory(getClient(datDir), datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, limit, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, arg)
 					if err != nil {
 						fmt.Println(err)
 					}
 				} else {
-					err := download(getClient(datDir), datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, nameAsSeries, writeNfo, metadataOnly, forceDownload, arg)
+					err := download(getClient(datDir), datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, arg)
 					if err != nil {
 						fmt.Println(err)
 					}
@@ -120,6 +121,7 @@ Supported URL formats:
 	downloadCmd.Flags().BoolVar(&writeNfo, "write-nfo", false, "Write tvshow.nfo metadata file for Plex/Jellyfin")
 	downloadCmd.Flags().BoolVar(&metadataOnly, "metadata-only", false, "Download only metadata (poster, fanart, NFO) - no videos or PDFs")
 	downloadCmd.Flags().BoolVar(&forceDownload, "force", false, "Re-download files even if they already exist")
+	downloadCmd.Flags().IntVarP(&concurrency, "concurrency", "c", 1, "Number of concurrent fragment downloads for yt-dlp")
 	downloadCmd.MarkFlagRequired("output")
 
 	var loginCmd = &cobra.Command{
@@ -911,7 +913,7 @@ func showCategoryMetadata(client *http.Client, profileUUID string, jsonOutput bo
 	return nil
 }
 
-func download(client *http.Client, datDir string, outputDir string, downloadPdfs bool, downloadPosters bool, ytdlExec string, nameAsSeries bool, writeNfo bool, metadataOnly bool, forceDownload bool, arg string) error {
+func download(client *http.Client, datDir string, outputDir string, downloadPdfs bool, downloadPosters bool, ytdlExec string, nameAsSeries bool, writeNfo bool, metadataOnly bool, forceDownload bool, concurrency int, arg string) error {
 	if (client.Jar.Cookies(&url.URL{Scheme: "https", Host: "www.masterclass.com"}) == nil) {
 		return fmt.Errorf("cookies not found. Please login first")
 	}
@@ -1074,7 +1076,7 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 				continue
 			}
 			fmt.Printf("Downloading chapter %d: %s\n", chapter.Number, chapter.Title)
-			err := downloadChapter(cycleclient, client, profile.UUID, outputDir, ytdlExec, chapter, class, apiKey, nameAsSeries, writeNfo, forceDownload)
+			err := downloadChapter(cycleclient, client, profile.UUID, outputDir, ytdlExec, chapter, class, apiKey, nameAsSeries, writeNfo, forceDownload, concurrency)
 			if err != nil {
 				return err
 			}
@@ -1121,7 +1123,7 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 	return nil
 }
 
-func downloadCategory(client *http.Client, datDir string, outputDir string, downloadPdfs bool, downloadPosters bool, ytdlExec string, limit int, nameAsSeries bool, writeNfo bool, metadataOnly bool, forceDownload bool, arg string) error {
+func downloadCategory(client *http.Client, datDir string, outputDir string, downloadPdfs bool, downloadPosters bool, ytdlExec string, limit int, nameAsSeries bool, writeNfo bool, metadataOnly bool, forceDownload bool, concurrency int, arg string) error {
 	if (client.Jar.Cookies(&url.URL{Scheme: "https", Host: "www.masterclass.com"}) == nil) {
 		return fmt.Errorf("cookies not found. Please login first")
 	}
@@ -1234,7 +1236,7 @@ func downloadCategory(client *http.Client, datDir string, outputDir string, down
 		fmt.Printf("\n[%d/%d] Downloading: %s\n", i+1, downloadCount, course.Title)
 		fmt.Println(strings.Repeat("=", 60))
 
-		err := download(client, datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, nameAsSeries, writeNfo, metadataOnly, forceDownload, course.Slug)
+		err := download(client, datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, course.Slug)
 		if err != nil {
 			fmt.Printf("Error downloading %s: %v\n", course.Slug, err)
 			// Continue with next course instead of stopping
@@ -1246,7 +1248,7 @@ func downloadCategory(client *http.Client, datDir string, outputDir string, down
 	return nil
 }
 
-func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profileUUID string, outputDir string, ytdlExec string, chapter Chapter, course CourseResponse, apiKey string, nameAsSeries bool, writeNfo bool, forceDownload bool) error {
+func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profileUUID string, outputDir string, ytdlExec string, chapter Chapter, course CourseResponse, apiKey string, nameAsSeries bool, writeNfo bool, forceDownload bool, concurrency int) error {
 	// Build cookie string from jar - try getting from www.masterclass.com
 	wwwURL, _ := url.Parse("https://www.masterclass.com")
 	edgeURL, _ := url.Parse("https://edge.masterclass.com")
@@ -1387,6 +1389,7 @@ func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profile
 		"--embed-subs", "--all-subs",
 		"--embed-metadata",
 		"-f", "bestvideo+bestaudio",
+		"-N", fmt.Sprintf("%d", concurrency),
 		"--postprocessor-args", metadataArgs,
 		chapterMetadata.Sources[0].Src,
 		"-o", outputFile,
