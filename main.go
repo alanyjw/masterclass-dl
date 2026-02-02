@@ -620,19 +620,26 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 
 	classSlug := ""
 	chapterSlug := ""
+	// Handle both /chapters/ (classes) and /episodes/ (series) URL patterns
 	if strings.Contains(arg, "/chapters/") {
 		classSlug = strings.Split(arg, "/chapters/")[0]
 		chapterSlug = strings.Split(arg, "/chapters/")[1]
+	} else if strings.Contains(arg, "/episodes/") {
+		classSlug = strings.Split(arg, "/episodes/")[0]
+		chapterSlug = strings.Split(arg, "/episodes/")[1]
 	} else {
 		classSlug = arg
 	}
 
+	// Strip URL prefixes for both classes and series
 	classSlug = strings.TrimPrefix(classSlug, "https://www.masterclass.com/classes/")
+	classSlug = strings.TrimPrefix(classSlug, "https://www.masterclass.com/series/")
+	classSlug = strings.TrimPrefix(classSlug, "classes/")
+	classSlug = strings.TrimPrefix(classSlug, "series/")
 	classSlug = strings.TrimSuffix(classSlug, "/")
-	chapterSlug = strings.TrimPrefix(chapterSlug, "https://www.masterclass.com/classes/")
 	chapterSlug = strings.TrimSuffix(chapterSlug, "/")
 	if classSlug == "" {
-		return fmt.Errorf("invalid class slug")
+		return fmt.Errorf("invalid class/series slug")
 	}
 
 	//get class info
