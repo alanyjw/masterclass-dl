@@ -53,6 +53,7 @@ func main() {
 	var outputDir string
 	var downloadPdfs bool
 	var ytdlExec string
+	var subsOnly bool
 	var downloadCmd = &cobra.Command{
 		Use:     "download [class/chapter...]",
 		Aliases: []string{"dl"},
@@ -61,7 +62,7 @@ func main() {
 		Args:    cobra.MatchAll(cobra.MinimumNArgs(1)),
 		Run: func(cmd *cobra.Command, args []string) {
 			for _, arg := range args {
-				err := download(getClient(datDir), datDir, outputDir, downloadPdfs, ytdlExec, arg)
+				err := download(getClient(datDir), datDir, outputDir, downloadPdfs, ytdlExec, subsOnly, arg)
 				if err != nil {
 					fmt.Println(err)
 				}
@@ -71,6 +72,7 @@ func main() {
 	downloadCmd.Flags().StringVarP(&outputDir, "output", "o", "", "Output directory")
 	downloadCmd.Flags().BoolVarP(&downloadPdfs, "pdfs", "p", true, "Download PDFs")
 	downloadCmd.Flags().StringVarP(&ytdlExec, "ytdl-exec", "y", "yt-dlp", "Path to the youtube-dl or yt-dlp executable")
+	downloadCmd.Flags().BoolVarP(&subsOnly, "subs-only", "s", false, "Download only subtitles (no video)")
 	downloadCmd.MarkFlagRequired("output")
 
 	var loginCmd = &cobra.Command{
@@ -606,7 +608,7 @@ func loginStatus(client *http.Client, datDir string) error {
 	return nil
 }
 
-func download(client *http.Client, datDir string, outputDir string, downloadPdfs bool, ytdlExec string, arg string) error {
+func download(client *http.Client, datDir string, outputDir string, downloadPdfs bool, ytdlExec string, subsOnly bool, arg string) error {
 	if (client.Jar.Cookies(&url.URL{Scheme: "https", Host: "www.masterclass.com"}) == nil) {
 		return fmt.Errorf("cookies not found. Please login first")
 	}
@@ -698,7 +700,7 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 			continue
 		}
 		fmt.Printf("Downloading chapter %d: %s\n", chapter.Number, chapter.Title)
-		err := downloadChapter(client, profile.UUID, outputDir, ytdlExec, chapter, apiKey)
+		err := downloadChapter(client, profile.UUID, outputDir, ytdlExec, subsOnly, chapter, apiKey)
 		if err != nil {
 			return err
 		}
@@ -709,7 +711,7 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 	return nil
 }
 
-func downloadChapter(client *http.Client, profileUUID string, outputDir string, ytdlExec string, chapter Chapter, apiKey string) error {
+func downloadChapter(client *http.Client, profileUUID string, outputDir string, ytdlExec string, subsOnly bool, chapter Chapter, apiKey string) error {
 	// Use CycleTLS for the media metadata API request to bypass any Cloudflare protection
 	cycleclient := cycletls.Init()
 	// Don't close cycleclient - it causes a panic and isn't necessary for short-lived processes
@@ -788,7 +790,12 @@ func downloadChapter(client *http.Client, profileUUID string, outputDir string, 
 		return fmt.Errorf("failed to parse metadata: %v", err)
 	}
 
-	cmd := exec.Command(ytdlExec, "--embed-subs", "--all-subs", "-f", "bestvideo+bestaudio", chapterMetadata.Sources[0].Src, "-o", path.Join(outputDir, fmt.Sprintf("%03d-%s.mp4", chapter.Number, chapter.Title)))
+	var cmd *exec.Cmd
+	if subsOnly {
+		cmd = exec.Command(ytdlExec, "--skip-download", "--write-subs", "--all-subs", chapterMetadata.Sources[0].Src, "-o", path.Join(outputDir, fmt.Sprintf("%03d-%s", chapter.Number, chapter.Title)))
+	} else {
+		cmd = exec.Command(ytdlExec, "--embed-subs", "--all-subs", "-f", "bestvideo+bestaudio", chapterMetadata.Sources[0].Src, "-o", path.Join(outputDir, fmt.Sprintf("%03d-%s.mp4", chapter.Number, chapter.Title)))
+	}
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
 	if err != nil {
