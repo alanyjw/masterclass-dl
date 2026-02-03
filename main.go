@@ -88,7 +88,7 @@ Supported URL formats:
 			if !downloadPdfs && !metadataOnly {
 				fmt.Println("--pdfs=false specified, skipping PDF downloads")
 			}
-			if !downloadPosters {
+			if !downloadPosters && !metadataOnly {
 				fmt.Println("--posters=false specified, skipping poster/fanart downloads")
 			}
 			if limit != 10 {
