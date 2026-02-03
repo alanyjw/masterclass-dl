@@ -69,9 +69,13 @@ masterclass-dl download -o ./downloads --limit 0 "https://www.masterclass.com/ho
 | `--output` | `-o` | (required) | Output directory |
 | `--limit` | `-l` | 10 | Max classes to download from a category (0 = unlimited) |
 | `--pdfs` | `-p` | true | Download PDF workbooks |
-| `--posters` | | true | Download poster and fanart images 
+| `--posters` | | true | Download poster and fanart images |
 | `--ytdl-exec` | `-y` | yt-dlp | Path to yt-dlp/youtube-dl executable |
 | `--name-files-as-series` | | false | Name files in TV series format for Plex/Jellyfin |
+| `--write-nfo` | | false | Generate NFO metadata files alongside downloads |
+| `--metadata-only` | | false | Download only metadata (no videos or PDFs) |
+| `--force` | | false | Force re-download and overwrite existing files |
+| `--concurrency` | | 1 | Number of concurrent downloads to run |
 
 #### Examples
 
