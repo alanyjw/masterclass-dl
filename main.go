@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"runtime"
 	"strings"
 
 	"github.com/Danny-Dasilva/CycleTLS/cycletls"
@@ -19,6 +20,32 @@ import (
 	"github.com/spf13/cobra"
 	"go.nhat.io/cookiejar"
 )
+
+// sanitizeFilename removes or replaces characters that are illegal in filenames.
+// On Windows: < > : " / \ | ? *
+// Also handles characters that are problematic across platforms.
+func sanitizeFilename(name string) string {
+	// Characters to replace (illegal on Windows, problematic elsewhere)
+	replacer := strings.NewReplacer(
+		"?", "#",
+		":", "#",
+		"<", "",
+		">", "",
+		"\"", "'",
+		"/", "-",
+		"\\", "-",
+		"|", "-",
+		"*", "",
+	)
+	result := replacer.Replace(name)
+
+	// On Windows, also handle trailing dots and spaces which are problematic
+	if runtime.GOOS == "windows" {
+		result = strings.TrimRight(result, ". ")
+	}
+
+	return result
+}
 
 // Common constants for requests
 const (
@@ -62,6 +89,7 @@ func main() {
 	var metadataOnly bool
 	var forceDownload bool
 	var concurrency int
+	var subsOnly bool
 	var downloadCmd = &cobra.Command{
 		Use:     "download [class/chapter/category...]",
 		Aliases: []string{"dl"},
@@ -99,12 +127,12 @@ Supported URL formats:
 			for _, arg := range args {
 				// Check if this is a category/homepage URL
 				if strings.Contains(arg, "/homepage/") {
-					err := downloadCategory(getClient(datDir), datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, limit, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, arg)
+					err := downloadCategory(getClient(datDir), datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, limit, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, subsOnly, arg)
 					if err != nil {
 						fmt.Println(err)
 					}
 				} else {
-					err := download(getClient(datDir), datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, arg)
+					err := download(getClient(datDir), datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, subsOnly, arg)
 					if err != nil {
 						fmt.Println(err)
 					}
@@ -122,6 +150,7 @@ Supported URL formats:
 	downloadCmd.Flags().BoolVar(&metadataOnly, "metadata-only", false, "Download only metadata (poster, fanart, NFO) - no videos or PDFs")
 	downloadCmd.Flags().BoolVar(&forceDownload, "force", false, "Re-download files even if they already exist")
 	downloadCmd.Flags().IntVarP(&concurrency, "concurrency", "c", 1, "Number of concurrent fragment downloads for yt-dlp")
+	downloadCmd.Flags().BoolVarP(&subsOnly, "subs-only", "s", false, "Download only subtitles (no video)")
 	downloadCmd.MarkFlagRequired("output")
 
 	var loginCmd = &cobra.Command{
@@ -272,24 +301,13 @@ func login(client *http.Client, datDir string, email string, password string, de
 			homePageResp.Cookies = append(homePageResp.Cookies, cookie)
 		}
 	}
-
-	// Rebuild cookie string with all cookies
-	cookieStr = ""
-	for _, cookie := range homePageResp.Cookies {
-		if cookieStr != "" {
-			cookieStr += "; "
-		}
-		cookieStr += cookie.Name + "=" + cookie.Value
-	}
-
 	// Get CSRF token
 	if debug {
 		fmt.Println("Getting CSRF token...")
 	}
 	csrfResp, err := cycleclient.Do("https://www.masterclass.com/api/v2/csrf-token", cycletls.Options{
-		Body:      "",
-		Ja3:       ja3,
-		UserAgent: userAgent,
+		Body: "",
+		Ja3:  ja3,
 		Headers: map[string]string{
 			"Referer": "https://www.masterclass.com/auth/login",
 			"Cookie":  cookieStr,
@@ -617,6 +635,32 @@ func getProfile(client *http.Client, datDir string) (*ProfileResponse, error) {
 	return &profile, nil
 }
 
+func fetchChapter(client *http.Client, profileUUID string, chapterID int) (*Chapter, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("https://www.masterclass.com/jsonapi/v1/chapters/%d?deep=true", chapterID), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Referer", "https://www.masterclass.com/")
+	req.Header.Set("Mc-Profile-Id", profileUUID)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("failed to fetch chapter: status %d", resp.StatusCode)
+	}
+
+	var chapter Chapter
+	err = json.NewDecoder(resp.Body).Decode(&chapter)
+	if err != nil {
+		return nil, err
+	}
+	return &chapter, nil
+}
+
 func loginStatus(client *http.Client, datDir string) error {
 	if (client.Jar.Cookies(&url.URL{Scheme: "https", Host: "www.masterclass.com"}) == nil) {
 		return fmt.Errorf("cookies not found. Please login first")
@@ -672,7 +716,6 @@ func loginStatus(client *http.Client, datDir string) error {
 	fmt.Printf("Subscription Remaining Days: %d\n", subscription.RemainingDays)
 	return nil
 }
-
 func showMetadata(client *http.Client, datDir string, jsonOutput bool, arg string) error {
 	if client.Jar.Cookies(&url.URL{Scheme: "https", Host: "www.masterclass.com"}) == nil {
 		return fmt.Errorf("cookies not found. Please login first")
@@ -913,7 +956,7 @@ func showCategoryMetadata(client *http.Client, profileUUID string, jsonOutput bo
 	return nil
 }
 
-func download(client *http.Client, datDir string, outputDir string, downloadPdfs bool, downloadPosters bool, ytdlExec string, nameAsSeries bool, writeNfo bool, metadataOnly bool, forceDownload bool, concurrency int, arg string) error {
+func download(client *http.Client, datDir string, outputDir string, downloadPdfs bool, downloadPosters bool, ytdlExec string, nameAsSeries bool, writeNfo bool, metadataOnly bool, forceDownload bool, concurrency int, subsOnly bool, arg string) error {
 	if (client.Jar.Cookies(&url.URL{Scheme: "https", Host: "www.masterclass.com"}) == nil) {
 		return fmt.Errorf("cookies not found. Please login first")
 	}
@@ -925,21 +968,30 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 
 	classSlug := ""
 	chapterSlug := ""
+	// Handle both /chapters/ (classes) and /episodes/ (series) URL patterns
 	if strings.Contains(arg, "/chapters/") {
 		classSlug = strings.Split(arg, "/chapters/")[0]
 		chapterSlug = strings.Split(arg, "/chapters/")[1]
+	} else if strings.Contains(arg, "/episodes/") {
+		classSlug = strings.Split(arg, "/episodes/")[0]
+		chapterSlug = strings.Split(arg, "/episodes/")[1]
 	} else {
 		classSlug = arg
 	}
 
+	// Strip URL prefixes for both classes and series
 	classSlug = strings.TrimPrefix(classSlug, "https://www.masterclass.com/classes/")
 	classSlug = strings.TrimPrefix(classSlug, "https://www.masterclass.com/series/")
+	classSlug = strings.TrimPrefix(classSlug, "classes/")
+	classSlug = strings.TrimPrefix(classSlug, "series/")
 	classSlug = strings.TrimSuffix(classSlug, "/")
 	chapterSlug = strings.TrimPrefix(chapterSlug, "https://www.masterclass.com/classes/")
 	chapterSlug = strings.TrimPrefix(chapterSlug, "https://www.masterclass.com/series/")
+	chapterSlug = strings.TrimPrefix(chapterSlug, "classes/")
+	chapterSlug = strings.TrimPrefix(chapterSlug, "series/")
 	chapterSlug = strings.TrimSuffix(chapterSlug, "/")
 	if classSlug == "" {
-		return fmt.Errorf("invalid class slug")
+		return fmt.Errorf("invalid class/series slug")
 	}
 
 	//get class info (include=instructors,chapters,categories ensures we get full data for series)
@@ -957,12 +1009,33 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("failed to get class info")
 	}
-	var class CourseResponse
-	err = json.NewDecoder(resp.Body).Decode(&class)
+	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
 
+	var class CourseResponse
+	err = json.Unmarshal(bodyBytes, &class)
+	if err != nil {
+		return err
+	}
+
+	// Handle shallow chapters (API returns only {"id": ...} for some courses)
+	// In this case, we need to fetch full chapter data individually
+	if len(class.Chapters) > 0 && class.Chapters[0].Slug == "" {
+		fmt.Println("Detected shallow chapter data, fetching full chapter details...")
+		for i, ch := range class.Chapters {
+			if ch.ID == 0 {
+				continue
+			}
+			fullChapter, err := fetchChapter(client, profile.UUID, ch.ID)
+			if err != nil {
+				fmt.Printf("  Warning: failed to fetch chapter %d: %v\n", ch.ID, err)
+				continue
+			}
+			class.Chapters[i] = *fullChapter
+		}
+	}
 	outputDir = path.Join(outputDir, sanitizeFilename(class.Title))
 	err = os.MkdirAll(outputDir, 0755)
 	if err != nil {
@@ -1059,27 +1132,55 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 		}
 	}
 
-	// Download videos (skip if metadataOnly)
+	downloadedCount := 0
+	// Download videos or subtitles (skip if metadataOnly)
 	if !metadataOnly {
 		// Masterclass uses a fixed API key for media metadata requests
 		apiKey := "b9517f7d8d1f48c2de88100f2c13e77a9d8e524aed204651acca65202ff5c6cb9244c045795b1fafda617ac5eb0a6c50"
 		fmt.Printf("Using API key\n")
 
-		// Create CycleTLS client once for all chapters (avoid memory leak)
-		cycleclient := cycletls.Init()
-		defer func() {
-			defer func() { recover() }() // Catch panic from Close()
-			cycleclient.Close()
-		}()
+		if chapterSlug != "" {
+			fmt.Printf("Looking for chapter slug: %s\n", chapterSlug)
+		}
+		fmt.Printf("Found %d chapters:\n", len(class.Chapters))
+		for _, ch := range class.Chapters {
+			fmt.Printf("  Chapter %d: %s (slug: %s)\n", ch.Number, ch.Title, ch.Slug)
+		}
 
-		for _, chapter := range class.Chapters {
-			if chapterSlug != "" && chapter.Slug != chapterSlug {
-				continue
+		if subsOnly {
+			for _, chapter := range class.Chapters {
+				if chapterSlug != "" && chapter.Slug != chapterSlug {
+					continue
+				}
+				fmt.Printf("Downloading chapter %d: %s\n", chapter.Number, chapter.Title)
+				downloaded, err := downloadChapterSubsOnly(client, profile.UUID, outputDir, ytdlExec, chapter, apiKey)
+				if err != nil {
+					return err
+				}
+				if downloaded {
+					downloadedCount++
+				}
 			}
-			fmt.Printf("Downloading chapter %d: %s\n", chapter.Number, chapter.Title)
-			err := downloadChapter(cycleclient, client, profile.UUID, outputDir, ytdlExec, chapter, class, apiKey, nameAsSeries, writeNfo, forceDownload, concurrency)
-			if err != nil {
-				return err
+		} else {
+			// Create CycleTLS client once for all chapters (avoid memory leak)
+			cycleclient := cycletls.Init()
+			defer func() {
+				defer func() { recover() }() // Catch panic from Close()
+				cycleclient.Close()
+			}()
+
+			for _, chapter := range class.Chapters {
+				if chapterSlug != "" && chapter.Slug != chapterSlug {
+					continue
+				}
+				fmt.Printf("Downloading chapter %d: %s\n", chapter.Number, chapter.Title)
+				downloaded, err := downloadChapterVideo(cycleclient, client, profile.UUID, outputDir, ytdlExec, chapter, class, apiKey, nameAsSeries, writeNfo, forceDownload, concurrency)
+				if err != nil {
+					return err
+				}
+				if downloaded {
+					downloadedCount++
+				}
 			}
 		}
 	}
@@ -1119,12 +1220,18 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 		}
 	}
 
-	fmt.Println("Done")
+	if !metadataOnly {
+		if subsOnly {
+			fmt.Printf("Done - %d subtitle(s) downloaded successfully\n", downloadedCount)
+		} else {
+			fmt.Printf("Done - %d chapter(s) downloaded successfully\n", downloadedCount)
+		}
+	}
 
 	return nil
 }
 
-func downloadCategory(client *http.Client, datDir string, outputDir string, downloadPdfs bool, downloadPosters bool, ytdlExec string, limit int, nameAsSeries bool, writeNfo bool, metadataOnly bool, forceDownload bool, concurrency int, arg string) error {
+func downloadCategory(client *http.Client, datDir string, outputDir string, downloadPdfs bool, downloadPosters bool, ytdlExec string, limit int, nameAsSeries bool, writeNfo bool, metadataOnly bool, forceDownload bool, concurrency int, subsOnly bool, arg string) error {
 	if (client.Jar.Cookies(&url.URL{Scheme: "https", Host: "www.masterclass.com"}) == nil) {
 		return fmt.Errorf("cookies not found. Please login first")
 	}
@@ -1237,7 +1344,7 @@ func downloadCategory(client *http.Client, datDir string, outputDir string, down
 		fmt.Printf("\n[%d/%d] Downloading: %s\n", i+1, downloadCount, course.Title)
 		fmt.Println(strings.Repeat("=", 60))
 
-		err := download(client, datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, course.Slug)
+		err := download(client, datDir, outputDir, downloadPdfs, downloadPosters, ytdlExec, nameAsSeries, writeNfo, metadataOnly, forceDownload, concurrency, subsOnly, course.Slug)
 		if err != nil {
 			fmt.Printf("Error downloading %s: %v\n", course.Slug, err)
 			// Continue with next course instead of stopping
@@ -1249,7 +1356,180 @@ func downloadCategory(client *http.Client, datDir string, outputDir string, down
 	return nil
 }
 
-func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profileUUID string, outputDir string, ytdlExec string, chapter Chapter, course CourseResponse, apiKey string, nameAsSeries bool, writeNfo bool, forceDownload bool, concurrency int) error {
+// getChapterStreamInfo fetches the stream URL and text tracks for a chapter
+func getChapterStreamInfo(client *http.Client, profileUUID string, mediaUUID string, apiKey string) (string, []TextTrack, error) {
+	// Use CycleTLS for the media metadata API request to bypass any Cloudflare protection
+	cycleclient := cycletls.Init()
+
+	// Build cookie string from jar
+	wwwURL, _ := url.Parse("https://www.masterclass.com")
+	edgeURL, _ := url.Parse("https://edge.masterclass.com")
+
+	wwwCookies := client.Jar.Cookies(wwwURL)
+	edgeCookies := client.Jar.Cookies(edgeURL)
+
+	cookieMap := make(map[string]string)
+	for _, c := range edgeCookies {
+		cookieMap[c.Name] = c.Value
+	}
+	for _, c := range wwwCookies {
+		cookieMap[c.Name] = c.Value
+	}
+
+	var cookieStr string
+	first := true
+	for name, value := range cookieMap {
+		if !first {
+			cookieStr += "; "
+		}
+		cookieStr += name + "=" + value
+		first = false
+	}
+
+	metadataResp, err := cycleclient.Do("https://edge.masterclass.com/api/v1/media/metadata/"+mediaUUID, cycletls.Options{
+		Body:      "",
+		Ja3:       ja3,
+		UserAgent: userAgent,
+		Headers: map[string]string{
+			"Accept":             "application/json",
+			"Accept-Language":    "en-US,en;q=0.9",
+			"Content-Type":       "application/json",
+			"Origin":             "https://www.masterclass.com",
+			"Referer":            "https://www.masterclass.com/",
+			"Mc-Profile-Id":      profileUUID,
+			"X-Api-Key":          apiKey,
+			"Cookie":             cookieStr,
+			"Sec-Fetch-Dest":     "empty",
+			"Sec-Fetch-Mode":     "cors",
+			"Sec-Fetch-Site":     "same-site",
+			"Sec-Ch-Ua":          `"Chromium";v="141", "Not?A_Brand";v="8"`,
+			"Sec-Ch-Ua-Mobile":   "?0",
+			"Sec-Ch-Ua-Platform": `"macOS"`,
+		},
+	}, "GET")
+
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to fetch metadata: %v", err)
+	}
+
+	if metadataResp.Status != 200 {
+		return "", nil, fmt.Errorf("failed to get chapter metadata: status=%d", metadataResp.Status)
+	}
+
+	var chapterMetadata ChapterMetadataResponse
+	err = json.Unmarshal([]byte(metadataResp.Body), &chapterMetadata)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to parse metadata: %v", err)
+	}
+
+	var streamURL string
+	if len(chapterMetadata.Sources) > 0 {
+		streamURL = chapterMetadata.Sources[0].Src
+	}
+
+	return streamURL, chapterMetadata.TextTracks, nil
+}
+
+func downloadChapterSubsOnly(client *http.Client, profileUUID string, outputDir string, ytdlExec string, chapter Chapter, apiKey string) (bool, error) {
+	// Skip chapters without video content (e.g., PDF-only chapters)
+	if chapter.MediaUUID == "" {
+		fmt.Printf("Skipping chapter %d: %s (no video content)\n", chapter.Number, chapter.Title)
+		return false, nil
+	}
+
+	safeTitle := sanitizeFilename(chapter.Title)
+	baseFilename := path.Join(outputDir, fmt.Sprintf("%03d-%s", chapter.Number, safeTitle))
+
+	// Get stream info from metadata API
+	streamURL, textTracks, err := getChapterStreamInfo(client, profileUUID, chapter.MediaUUID, apiKey)
+	if err != nil {
+		fmt.Printf("  Warning: failed to get stream info: %v\n", err)
+	}
+
+	// Prefer TextTracks from metadata API, fall back to chapter data
+	tracks := textTracks
+	if len(tracks) == 0 {
+		tracks = chapter.TextTracks
+	}
+
+	// First, try direct TextTracks download (faster than yt-dlp)
+	downloadedSubs := 0
+	if len(tracks) > 0 {
+		for _, track := range tracks {
+			if track.Src == "" {
+				continue
+			}
+			// Create filename with language code
+			subFilename := fmt.Sprintf("%s.%s.vtt", baseFilename, track.SrcLang)
+
+			// Download the VTT file directly
+			resp, err := http.Get(track.Src)
+			if err != nil {
+				fmt.Printf("  Warning: failed to download %s subtitle: %v\n", track.Label, err)
+				continue
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode != 200 {
+				fmt.Printf("  Warning: failed to download %s subtitle: status %d\n", track.Label, resp.StatusCode)
+				continue
+			}
+
+			subFile, err := os.Create(subFilename)
+			if err != nil {
+				fmt.Printf("  Warning: failed to create subtitle file for %s: %v\n", track.Label, err)
+				continue
+			}
+
+			_, err = io.Copy(subFile, resp.Body)
+			subFile.Close()
+			if err != nil {
+				fmt.Printf("  Warning: failed to write subtitle file for %s: %v\n", track.Label, err)
+				continue
+			}
+
+			fmt.Printf("  Downloaded subtitle: %s (%s)\n", track.Label, track.SrcLang)
+			downloadedSubs++
+		}
+	}
+
+	if downloadedSubs > 0 {
+		return true, nil
+	}
+
+	// Fallback: try yt-dlp subtitle extraction (works if subs are in HLS manifest)
+	if streamURL != "" {
+		fmt.Printf("  TextTracks empty, trying yt-dlp fallback...\n")
+		cmd := exec.Command(ytdlExec, "--skip-download", "--write-subs", "--all-subs", "-o", baseFilename+".%(ext)s", streamURL)
+		// Suppress yt-dlp output - it can crash on some URLs due to regex bugs
+		cmd.Run()
+
+		// Check if yt-dlp produced any subtitle files
+		entries, _ := os.ReadDir(outputDir)
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, fmt.Sprintf("%03d-%s", chapter.Number, safeTitle)) &&
+				(strings.HasSuffix(name, ".vtt") || strings.HasSuffix(name, ".srt") || strings.HasSuffix(name, ".ass")) {
+				fmt.Printf("  Downloaded subtitle via yt-dlp: %s\n", name)
+				downloadedSubs++
+			}
+		}
+	}
+
+	if downloadedSubs == 0 {
+		fmt.Printf("Skipping chapter %d: %s (no subtitles available from any source)\n", chapter.Number, chapter.Title)
+		return false, nil
+	}
+	return true, nil
+}
+
+func downloadChapterVideo(cycleclient cycletls.CycleTLS, client *http.Client, profileUUID string, outputDir string, ytdlExec string, chapter Chapter, course CourseResponse, apiKey string, nameAsSeries bool, writeNfo bool, forceDownload bool, concurrency int) (bool, error) {
+	// Skip chapters without video content (e.g., PDF-only chapters)
+	if chapter.MediaUUID == "" {
+		fmt.Printf("Skipping chapter %d: %s (no video content)\n", chapter.Number, chapter.Title)
+		return false, nil
+	}
+
 	// Build cookie string from jar - try getting from www.masterclass.com
 	wwwURL, _ := url.Parse("https://www.masterclass.com")
 	edgeURL, _ := url.Parse("https://edge.masterclass.com")
@@ -1257,8 +1537,6 @@ func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profile
 	// Get cookies from both URLs and merge them
 	wwwCookies := client.Jar.Cookies(wwwURL)
 	edgeCookies := client.Jar.Cookies(edgeURL)
-
-	fmt.Printf("Debug: www cookies: %d, edge cookies: %d\n", len(wwwCookies), len(edgeCookies))
 
 	// Build a map to collect unique cookies, preferring www cookies
 	cookieMap := make(map[string]string)
@@ -1278,13 +1556,6 @@ func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profile
 		cookieStr += name + "=" + value
 		first = false
 	}
-
-	// Debug: show what we're sending
-	fmt.Printf("Media metadata request:\n")
-	fmt.Printf("  URL: https://edge.masterclass.com/api/v1/media/metadata/%s\n", chapter.MediaUUID)
-	fmt.Printf("  Mc-Profile-Id: %s\n", profileUUID)
-	fmt.Printf("  X-Api-Key: %s\n", apiKey)
-	fmt.Printf("  Cookie header length: %d\n", len(cookieStr))
 
 	metadataResp, err := cycleclient.Do("https://edge.masterclass.com/api/v1/media/metadata/"+chapter.MediaUUID, cycletls.Options{
 		Body:      "",
@@ -1309,19 +1580,28 @@ func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profile
 	}, "GET")
 
 	if err != nil {
-		return fmt.Errorf("failed to fetch metadata: %v", err)
+		return false, fmt.Errorf("failed to fetch metadata: %v", err)
 	}
 
 	if metadataResp.Status != 200 {
 		fmt.Printf("Response status: %d\n", metadataResp.Status)
-		fmt.Printf("Response body: %s\n", metadataResp.Body[:min(len(metadataResp.Body), 500)])
-		return fmt.Errorf("failed to get chapter metadata: status=%d", metadataResp.Status)
+		previewLen := min(len(metadataResp.Body), 500)
+		if previewLen > 0 {
+			fmt.Printf("Response body: %s\n", metadataResp.Body[:previewLen])
+		}
+		return false, fmt.Errorf("failed to get chapter metadata: status=%d", metadataResp.Status)
 	}
 
 	var chapterMetadata ChapterMetadataResponse
 	err = json.Unmarshal([]byte(metadataResp.Body), &chapterMetadata)
 	if err != nil {
-		return fmt.Errorf("failed to parse metadata: %v", err)
+		return false, fmt.Errorf("failed to parse metadata: %v", err)
+	}
+
+	// Check if there are video sources available
+	if len(chapterMetadata.Sources) == 0 {
+		fmt.Printf("Skipping chapter %d: %s (no video sources)\n", chapter.Number, chapter.Title)
+		return false, nil
 	}
 
 	// Generate filename based on naming mode
@@ -1343,7 +1623,7 @@ func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profile
 	if !forceDownload {
 		if _, err := os.Stat(outputFile); err == nil {
 			fmt.Printf("Skipping %s (already exists)\n", baseFileName+".mp4")
-			return nil
+			return false, nil
 		}
 	}
 
@@ -1401,7 +1681,7 @@ func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profile
 	cmd.Stderr = os.Stderr
 	err = cmd.Run()
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Write episode NFO if requested
@@ -1413,24 +1693,14 @@ func downloadChapter(cycleclient cycletls.CycleTLS, client *http.Client, profile
 		}
 	}
 
-	return nil
+	return true, nil
 }
 
-// sanitizeFilename removes or replaces characters that are invalid in filenames
-func sanitizeFilename(name string) string {
-	// Replace problematic characters
-	replacer := strings.NewReplacer(
-		"/", "-",
-		"\\", "-",
-		":", "-",
-		"*", "",
-		"?", "",
-		"\"", "",
-		"<", "",
-		">", "",
-		"|", "",
-	)
-	return replacer.Replace(name)
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func downloadImage(client *http.Client, imageURL string, outputPath string) error {
