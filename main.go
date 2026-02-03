@@ -719,6 +719,12 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 }
 
 func downloadChapter(client *http.Client, profileUUID string, outputDir string, ytdlExec string, subsOnly bool, chapter Chapter, apiKey string) error {
+	// Skip chapters without video content (e.g., PDF-only chapters)
+	if chapter.MediaUUID == "" {
+		fmt.Printf("Skipping chapter %d: %s (no video content)\n", chapter.Number, chapter.Title)
+		return nil
+	}
+
 	// Use CycleTLS for the media metadata API request to bypass any Cloudflare protection
 	cycleclient := cycletls.Init()
 	// Don't close cycleclient - it causes a panic and isn't necessary for short-lived processes
@@ -795,6 +801,12 @@ func downloadChapter(client *http.Client, profileUUID string, outputDir string, 
 	err = json.Unmarshal([]byte(metadataResp.Body), &chapterMetadata)
 	if err != nil {
 		return fmt.Errorf("failed to parse metadata: %v", err)
+	}
+
+	// Check if there are video sources available
+	if len(chapterMetadata.Sources) == 0 {
+		fmt.Printf("Skipping chapter %d: %s (no video sources)\n", chapter.Number, chapter.Title)
+		return nil
 	}
 
 	var cmd *exec.Cmd
