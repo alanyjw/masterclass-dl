@@ -1046,7 +1046,8 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 				return fmt.Errorf("failed to download PDF")
 			}
 			fmt.Printf("Downloading: %s\n", pdfTitle)
-			pdfFile, err := os.Create(path.Join(outputDir, pdfTitle+".pdf"))
+			safePdfTitle := sanitizeFilename(pdfTitle)
+			pdfFile, err := os.Create(path.Join(outputDir, safePdfTitle+".pdf"))
 			if err != nil {
 				return err
 			}
