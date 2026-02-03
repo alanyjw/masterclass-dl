@@ -7,6 +7,7 @@ A command line tool to download masterclass.com classes.
 - **Download entire categories** - Bulk download all classes from any category page
 - **Plex-ready output** - Poster (`poster.jpg`) and fanart (`fanart.jpg`) images for media servers
 - **Embedded subtitles** - 10+ languages automatically embedded in videos
+- **Subtitles-only mode** - Download just subtitles without video files
 - **PDF workbooks** - Class guides and supplementary materials
 - **Flexible options** - Control what gets downloaded with `--pdfs`, `--posters`, `--limit`
 
@@ -74,6 +75,7 @@ masterclass-dl download -o ./downloads --limit 0 "https://www.masterclass.com/ho
 | `--name-files-as-series` | | false | Name files in TV series format for Plex/Jellyfin |
 | `--write-nfo` | | false | Generate NFO metadata files alongside downloads |
 | `--metadata-only` | | false | Download only metadata (no videos or PDFs) |
+| `--subs-only` | `-s` | false | Download only subtitles (no video) |
 | `--force` | | false | Force re-download and overwrite existing files |
 | `--concurrency` | | 1 | Number of concurrent downloads to run |
 
@@ -88,6 +90,9 @@ masterclass-dl download -o ./downloads --pdfs=false "https://www.masterclass.com
 
 # Download without poster images
 masterclass-dl download -o ./downloads --posters=false "https://www.masterclass.com/classes/gordon-ramsay-teaches-cooking"
+
+# Download subtitles only (no video)
+masterclass-dl download -o ./downloads --subs-only "https://www.masterclass.com/classes/gordon-ramsay-teaches-cooking"
 
 # Download first 5 classes from a category
 masterclass-dl download -o ./downloads --limit 5 "https://www.masterclass.com/homepage/science-and-tech"
