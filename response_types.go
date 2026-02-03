@@ -391,6 +391,16 @@ type Chapter struct {
 	Season              interface{}   `json:"season"`
 	ChaptersInstructors []interface{} `json:"chapters_instructors"`
 	Instructors         []interface{} `json:"instructors"`
+	TextTracks          []TextTrack   `json:"text_tracks"`
+}
+
+type TextTrack struct {
+	Src      string `json:"src"`
+	SrcLang  string `json:"srclang"`
+	Label    string `json:"label"`
+	Kind     string `json:"kind"`
+	Default  bool   `json:"default"`
+	MimeType string `json:"mime_type"`
 }
 
 type ChapterMetadataResponse struct {
@@ -403,12 +413,5 @@ type ChapterMetadataResponse struct {
 		Type  string `json:"type"`
 		Src   string `json:"src"`
 	}
-	TextTracks []struct {
-		Src      string `json:"src"`
-		SrcLang  string `json:"srclang"`
-		Label    string `json:"label"`
-		Kind     string `json:"kind"`
-		Default  bool   `json:"default"`
-		MimeType string `json:"mime_type"`
-	} `json:"text_tracks"`
+	TextTracks []TextTrack `json:"text_tracks"`
 }
