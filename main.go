@@ -14,6 +14,7 @@ import (
 	"path"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/Danny-Dasilva/CycleTLS/cycletls"
 	"github.com/manifoldco/promptui"
@@ -215,11 +216,39 @@ func getClient(datDir string) *http.Client {
 	)
 
 	return &http.Client{
-		Jar: jar,
+		Jar:     jar,
+		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{},
 		},
 	}
+}
+
+// doWithRetry executes an HTTP request with retry and exponential backoff for transient errors.
+func doWithRetry(client *http.Client, req *http.Request, maxRetries int) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err = client.Do(req)
+		if err != nil {
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(1<<uint(attempt)) * time.Second)
+				continue
+			}
+			return nil, err
+		}
+		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+			resp.Body.Close()
+			if attempt < maxRetries {
+				wait := time.Duration(1<<uint(attempt)) * time.Second
+				fmt.Printf("  Server returned %d, retrying in %v...\n", resp.StatusCode, wait)
+				time.Sleep(wait)
+				continue
+			}
+		}
+		return resp, nil
+	}
+	return resp, err
 }
 
 func login(client *http.Client, datDir string, email string, password string, debug bool) error {
@@ -643,7 +672,7 @@ func fetchChapter(client *http.Client, profileUUID string, chapterID int) (*Chap
 	req.Header.Set("Referer", "https://www.masterclass.com/")
 	req.Header.Set("Mc-Profile-Id", profileUUID)
 
-	resp, err := client.Do(req)
+	resp, err := doWithRetry(client, req, 3)
 	if err != nil {
 		return nil, err
 	}
@@ -825,7 +854,7 @@ func showCategoryMetadata(client *http.Client, profileUUID string, jsonOutput bo
 	req.Header.Set("Referer", "https://www.masterclass.com/"+categorySlug)
 	req.Header.Set("Mc-Profile-Id", profileUUID)
 
-	resp, err := client.Do(req)
+	resp, err := doWithRetry(client, req, 3)
 	if err != nil {
 		return err
 	}
@@ -898,7 +927,7 @@ func showCategoryMetadata(client *http.Client, profileUUID string, jsonOutput bo
 			req.Header.Set("Referer", "https://www.masterclass.com/classes/"+slug)
 			req.Header.Set("Mc-Profile-Id", profileUUID)
 
-			resp, err := client.Do(req)
+			resp, err := doWithRetry(client, req, 3)
 			if err != nil {
 				continue
 			}
@@ -1001,7 +1030,7 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 	if err != nil {
 		return err
 	}
-	resp, err := client.Do(req)
+	resp, err := doWithRetry(client, req, 3)
 	if err != nil {
 		return err
 	}
@@ -1077,7 +1106,7 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 				}
 				pdfReq.Header.Set("Referer", "https://www.masterclass.com/classes/"+classSlug)
 				pdfReq.Header.Set("Mc-Profile-Id", profile.UUID)
-				pdfResp, err := client.Do(pdfReq)
+				pdfResp, err := doWithRetry(client, pdfReq, 3)
 				if err != nil {
 					fmt.Printf("Warning: failed to fetch PDF %d: %v\n", pdf.ID, err)
 					continue
@@ -1110,7 +1139,7 @@ func download(client *http.Client, datDir string, outputDir string, downloadPdfs
 			}
 			req.Header.Set("Referer", "https://www.masterclass.com/classes/"+classSlug)
 			req.Header.Set("Mc-Profile-Id", profile.UUID)
-			resp, err := client.Do(req)
+			resp, err := doWithRetry(client, req, 3)
 			if err != nil {
 				return err
 			}
@@ -1266,7 +1295,7 @@ func downloadCategory(client *http.Client, datDir string, outputDir string, down
 	req.Header.Set("Referer", "https://www.masterclass.com/"+categorySlug)
 	req.Header.Set("Mc-Profile-Id", profile.UUID)
 
-	resp, err := client.Do(req)
+	resp, err := doWithRetry(client, req, 3)
 	if err != nil {
 		return err
 	}
@@ -1463,7 +1492,7 @@ func downloadChapterSubsOnly(client *http.Client, profileUUID string, outputDir 
 			subFilename := fmt.Sprintf("%s.%s.vtt", baseFilename, track.SrcLang)
 
 			// Download the VTT file directly
-			resp, err := http.Get(track.Src)
+			resp, err := client.Get(track.Src)
 			if err != nil {
 				fmt.Printf("  Warning: failed to download %s subtitle: %v\n", track.Label, err)
 				continue
@@ -1505,7 +1534,10 @@ func downloadChapterSubsOnly(client *http.Client, profileUUID string, outputDir 
 		cmd.Run()
 
 		// Check if yt-dlp produced any subtitle files
-		entries, _ := os.ReadDir(outputDir)
+		entries, err := os.ReadDir(outputDir)
+		if err != nil {
+			fmt.Printf("  Warning: failed to read output directory: %v\n", err)
+		}
 		for _, entry := range entries {
 			name := entry.Name()
 			if strings.HasPrefix(name, fmt.Sprintf("%03d-%s", chapter.Number, safeTitle)) &&
@@ -1667,6 +1699,7 @@ func downloadChapterVideo(cycleclient cycletls.CycleTLS, client *http.Client, pr
 
 	// Build yt-dlp command with metadata embedding
 	args := []string{
+		"--continue",
 		"--embed-subs", "--all-subs",
 		"--embed-metadata",
 		"-f", "bestvideo+bestaudio",
