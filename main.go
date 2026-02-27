@@ -210,7 +210,7 @@ Supported URL formats:
 func getClient(datDir string) *http.Client {
 	jar := cookiejar.NewPersistentJar(
 		cookiejar.WithFilePath(path.Join(datDir, "cookies.json")),
-		cookiejar.WithFilePerm(0755),
+		cookiejar.WithFilePerm(0600),
 		cookiejar.WithAutoSync(true),
 	)
 
@@ -238,9 +238,6 @@ func login(client *http.Client, datDir string, email string, password string, de
 	if debug {
 		fmt.Printf("Attempting login with email: %s\n", email)
 		fmt.Printf("Password length: %d characters\n", len(password))
-		if len(password) > 0 {
-			fmt.Printf("Password first char: %c, last char: %c\n", password[0], password[len(password)-1])
-		}
 	}
 
 	// First, visit the home page to establish session (required for login to work)
@@ -1360,6 +1357,10 @@ func downloadCategory(client *http.Client, datDir string, outputDir string, down
 func getChapterStreamInfo(client *http.Client, profileUUID string, mediaUUID string, apiKey string) (string, []TextTrack, error) {
 	// Use CycleTLS for the media metadata API request to bypass any Cloudflare protection
 	cycleclient := cycletls.Init()
+	defer func() {
+		defer func() { recover() }() // Catch panic from Close()
+		cycleclient.Close()
+	}()
 
 	// Build cookie string from jar
 	wwwURL, _ := url.Parse("https://www.masterclass.com")
@@ -1501,8 +1502,10 @@ func downloadChapterSubsOnly(client *http.Client, profileUUID string, outputDir 
 	if streamURL != "" {
 		fmt.Printf("  TextTracks empty, trying yt-dlp fallback...\n")
 		cmd := exec.Command(ytdlExec, "--skip-download", "--write-subs", "--all-subs", "-o", baseFilename+".%(ext)s", streamURL)
-		// Suppress yt-dlp output - it can crash on some URLs due to regex bugs
-		cmd.Run()
+		// yt-dlp can crash on some URLs due to regex bugs, so treat errors as non-fatal
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("  Warning: yt-dlp subtitle extraction failed: %v\n", err)
+		}
 
 		// Check if yt-dlp produced any subtitle files
 		entries, _ := os.ReadDir(outputDir)
