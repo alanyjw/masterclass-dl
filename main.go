@@ -156,10 +156,32 @@ Supported URL formats:
 	var loginCmd = &cobra.Command{
 		Use:   "login [email] [password]",
 		Short: "Login to masterclass.com",
-		Args:  cobra.ExactArgs(2),
+		Long: `Login to masterclass.com with your email and password.
+
+Password is resolved in this order:
+  1. Command-line argument (not recommended — visible in shell history and process list)
+  2. MASTERCLASS_PASSWORD environment variable
+  3. Interactive secure prompt (recommended)`,
+		Args: cobra.RangeArgs(1, 2),
 		Run: func(cmd *cobra.Command, args []string) {
 			email := args[0]
-			password := args[1]
+			var password string
+			if len(args) >= 2 {
+				password = args[1]
+			} else if envPass := os.Getenv("MASTERCLASS_PASSWORD"); envPass != "" {
+				password = envPass
+			} else {
+				prompt := promptui.Prompt{
+					Label: "Password",
+					Mask:  '*',
+				}
+				var err error
+				password, err = prompt.Run()
+				if err != nil {
+					fmt.Printf("Error reading password: %v\n", err)
+					return
+				}
+			}
 			err := login(getClient(datDir), datDir, email, password, debug)
 			if err != nil {
 				fmt.Println(err)
