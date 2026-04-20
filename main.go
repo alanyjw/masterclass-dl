@@ -1174,6 +1174,10 @@ func getCampTaskMediaUUID(client *http.Client, profileUUID string, campSlug stri
 	if err != nil {
 		return "", err
 	}
+	if resp.StatusCode != 200 {
+		resp.Body.Close()
+		return "", fmt.Errorf("failed to get camp task info: status %d", resp.StatusCode)
+	}
 
 	var taskDetail CampTaskDetailResponse
 	err = json.NewDecoder(resp.Body).Decode(&taskDetail)

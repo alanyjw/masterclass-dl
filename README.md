@@ -5,6 +5,7 @@ A command line tool to download masterclass.com classes.
 ## Features
 
 - **Download entire categories** - Bulk download all classes from any category page
+- **Sessions support** - Download MasterClass Sessions (`/sessions/classes/{slug}`) in addition to regular classes and series
 - **Plex-ready output** - Poster (`poster.jpg`) and fanart (`fanart.jpg`) images for media servers
 - **Embedded subtitles** - 10+ languages automatically embedded in videos
 - **Subtitles-only mode** - Download just subtitles without video files
@@ -65,7 +66,7 @@ masterclass-dl status
 
 ### Download
 
-Download individual classes, specific chapters, or **bulk download entire categories**:
+Download individual classes, specific chapters, Sessions, or **bulk download entire categories**:
 
 ```bash
 # Download a single class
@@ -73,6 +74,9 @@ masterclass-dl download -o ./downloads "https://www.masterclass.com/classes/gord
 
 # Download a specific chapter
 masterclass-dl download -o ./downloads "https://www.masterclass.com/classes/gordon-ramsay-teaches-cooking/chapters/introduction"
+
+# Download a MasterClass Session
+masterclass-dl download -o ./downloads "https://www.masterclass.com/sessions/classes/<slug>"
 
 # Download all classes in a category (first 10 by default)
 masterclass-dl download -o ./downloads "https://www.masterclass.com/homepage/science-and-tech"
